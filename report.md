@@ -50,18 +50,23 @@ The final clean modeling population contains 22,049 rows with zero nulls across 
 
 ---
 
-## Open Questions for the City Liaison
+## Open Questions for the City Liaison (Dev)
 
 **On negative and very short review times.** The dataset contains 80 permits with negative `totaldaysplanreview` values and 130 with zero days, as well as 455 additional permits with review times under 7 days. These values are either data entry errors or reflect a review pathway we don't understand. Can the city explain how a permit could record a negative or zero review time? Are these corrections applied retroactively, date entry mistakes, or permits that bypassed normal review for a specific reason?
 
-**On the 9,060 completed permits missing review time.** These are fully completed permits — the process is over — but they have no recorded `totaldaysplanreview`. They skew strongly toward small residential addition/alteration projects. Is there a specific review pathway (over-the-counter, express review, pre-approved plan sets) that does not generate a `totaldaysplanreview` entry in the system? Understanding this would tell us whether these permits are genuinely out of scope for the predictive tool or whether the data simply wasn't captured.
+**On the 9,060 completed permits missing review time.** These are fully completed permits — the process is over — but they have no recorded `totaldaysplanreview`. They skew strongly toward small residential addition/alteration projects. Is there a specific review pathway (over-the-counter, express review, pre-approved plan sets) that does not generate a `totaldaysplanreview` entry in the system? Understanding this would tell us whether these permits are genuinely out of scope for the predictive tool or whether the data simply wasn't captured. 
+- these are projects that are subject to field inspection, usually for small projects, and are considered complete in less than a day, hence the lack of a review time. 
 
-**On the Unknown zoning category.** After filtering to the post-2020 modeling population, 3,442 permits (15.6%) have no zoning value recorded. Is missing zoning a meaningful signal — for example, do certain permit types not require zoning assignment — or is it a data entry gap? If it's systematic, understanding which permit types drive it would help us decide whether to treat Unknown zoning as a feature value or as a flag for a different process pathway.
+**On the Unknown zoning category.** After filtering to the post-2020adjust to use data from 2018 onward as long as the permitissuedate exists) modeling population, 3,442 permits (15.6%) have no zoning value recorded. Is missing zoning a meaningful signal — for example, do certain permit types not require zoning assignment — or is it a data entry gap? If it's systematic, understanding which permit types drive it would help us decide whether to treat Unknown zoning as a feature value or as a flag for a different process pathway. 
 
 **On the Unknown housingcategory.** 6,878 permits in the modeling population (31.2%) have no `housingcategory`. This is the highest null rate of any high-signal feature. Is `housingcategory` only assigned to residential permits, or should all permits have a value? If it's residential-only, we can use its absence as a reliable non-residential indicator rather than treating it as missing data.
+- low data quality, some projects don't get categorized properly and there's a delay in how quickly the city is able to fill out these fields, the city also only assigns them once the building has already been built. Not useful for modeling. 'housingunitsadded' 'housingunitsremoved' 'housingunitsnet'
 
 **On the review dataset coverage.** We understand that `df_review` captures correction cycle records for plans that were sent back for revisions. Can the city confirm whether approved permits ever appear in the review dataset, or whether the absence of review records is a reliable indicator that a permit's correction history is simply not exported? Specifically: are there permits that went through multiple correction cycles, were ultimately approved, and whose review records are nonetheless absent from this export?
+- 
 
 **On the plan comments dataset.** Only 707 permits have comment records despite 40,183 permits in the post-2020 population. Is `df_comments` a partial export, or does it only capture comments from a specific review team or system? If comments exist for a broader permit population in the source system, access to a more complete export would substantially improve the NLP analysis planned as a stretch deliverable.
 
 **On the `daysoutcorrections` field.** This field has a maximum value of 4,295 days in the raw data — nearly 12 years. Even after capping at the 99th percentile (1,005 days), the range is extreme. Does this field measure cumulative time the applicant spent making corrections across all cycles, or is it something else? Clarifying the exact definition would help us decide whether it's a legitimate complexity proxy or a field with its own data quality issues.
+
+-dwellingunittype is a better way to subcategorize the type of building that the permit is being submitted for. 
