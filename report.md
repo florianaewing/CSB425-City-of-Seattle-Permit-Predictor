@@ -69,4 +69,5 @@ The final clean modeling population contains 22,049 rows with zero nulls across 
 
 **On the `daysoutcorrections` field.** This field has a maximum value of 4,295 days in the raw data — nearly 12 years. Even after capping at the 99th percentile (1,005 days), the range is extreme. Does this field measure cumulative time the applicant spent making corrections across all cycles, or is it something else? Clarifying the exact definition would help us decide whether it's a legitimate complexity proxy or a field with its own data quality issues.
 
--dwellingunittype is a better way to subcategorize the type of building that the permit is being submitted for. 
+- 'dwellingunittype' is a better way to subcategorize the type of building that the permit is being submitted for.
+- 'reviewpriority' most are default, or emergency 1, 2, 3, so anything but default reviewpriority shouldn't be included in the modeling dataset. 
