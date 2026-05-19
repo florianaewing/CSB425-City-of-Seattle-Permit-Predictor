@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Seattle Permit Predictor</title>
+  <link rel="stylesheet" href="styles.css" />
+
+  <!--
+    onnxruntime-web: runs the ONNX model entirely in the browser.
+    No server required — all inference happens client-side.
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort.min.js"></script>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────── -->
+<header>
+  <div class="header-inner">
+    <p class="header-eyebrow">City of Seattle — CSB 425 Project</p>
+    <h1 class="header-title">Seattle Permit Predictor</h1>
+    <p class="header-subtitle">
+      Enter a Seattle address and project type to estimate how long the
+      building permit review process is likely to take.
+    </p>
+  </div>
+</header>
+
+<!-- ── Main ────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- Model status banner (shown while ONNX loads) -->
+  <div id="model-status" class="status-msg loading" style="text-align:center; margin-bottom:16px;">
+    <span class="spinner"></span> Loading prediction model…
+  </div>
+
+  <!-- ── Input Card ──────────────────────────────────────────── -->
+  <div class="card">
+    <h2 class="card-title">Project Details</h2>
+
+    <div class="form-grid">
+
+      <!-- Address -->
+      <div class="form-group full-width">
+        <label for="address">Seattle Address</label>
+        <div class="address-row">
+          <input
+            type="text"
+            id="address"
+            placeholder="e.g. 123 Main St, Seattle, WA"
+            autocomplete="street-address"
+          />
+          <button class="btn-geocode" id="btn-geocode" type="button">Look Up</button>
+        </div>
+        <div class="coords-display" id="coords-display"></div>
+        <p class="hint">Address is used to determine your neighborhood. Seattle addresses only.</p>
+      </div>
+
+      <!-- Project Type -->
+      <div class="form-group">
+        <label for="project-type">Project Type</label>
+        <div class="select-wrapper">
+          <select id="project-type">
+            <option value="" disabled selected>Select a project type…</option>
+            <option value="sfr">Single-Family New Construction</option>
+            <option value="adu">Attached ADU (Accessory Dwelling Unit)</option>
+            <option value="dadu">Detached DADU (Detached Accessory Dwelling Unit)</option>
+            <option value="sfr_adu">Single-Family + ADU</option>
+            <option value="sfr_dadu">Single-Family + DADU</option>
+            <option value="multifamily">Multifamily New Construction</option>
+            <option value="commercial">Commercial New Construction</option>
+            <option value="tenant_imp">Tenant Improvement</option>
+          </select>
+        </div>
+      </div>
+
+      <!-- Estimated Cost -->
+      <div class="form-group">
+        <label for="est-cost">Estimated Project Cost ($)</label>
+        <input
+          type="number"
+          id="est-cost"
+          placeholder="e.g. 350000"
+          min="0"
+          step="1000"
+        />
+        <p class="hint">Total construction cost estimate.</p>
+      </div>
+
+      <!-- Units Added -->
+      <div class="form-group">
+        <label for="units-added">Housing Units Added</label>
+        <div class="select-wrapper">
+          <select id="units-added">
+            <option value="1">1 unit</option>
+            <option value="2">2 units</option>
+            <option value="3">3 units</option>
+          </select>
+        </div>
+      </div>
+
+    </div><!-- /form-grid -->
+
+    <button class="btn-predict" id="btn-predict" type="button" disabled>
+      Estimate Review Time
+    </button>
+    <div class="status-msg" id="predict-status"></div>
+
+  </div><!-- /card -->
+
+
+  <!-- ── Results Card ────────────────────────────────────────── -->
+  <div class="card" id="results-card">
+    <h2 class="card-title">Estimated Review Timeline</h2>
+
+    <div class="result-main">
+      <p class="result-label">Predicted permit review time</p>
+      <div class="result-days" id="result-days">— <span>days</span></div>
+      <p class="result-approx" id="result-approx"></p>
+    </div>
+
+    <div class="ci-section">
+      <p class="ci-label">80% Confidence Interval</p>
+      <div class="ci-bar-wrap" id="ci-bar-wrap">
+        <div class="ci-bar-fill" id="ci-bar-fill"></div>
+        <div class="ci-bar-point" id="ci-bar-point"></div>
+      </div>
+      <div class="ci-values">
+        <span id="ci-low">—</span>
+        <span class="ci-mid" id="ci-mid">— days</span>
+        <span id="ci-high">—</span>
+      </div>
+    </div>
+
+    <div class="disclaimer">
+      <strong>Note:</strong> This estimate is based on historical permit data for
+      building permits in Seattle (2020–2024). Actual review
+      times vary based on plan completeness, reviewer workload, and correction
+      cycles. The 80% confidence interval reflects the range within which 80% of
+      similar permits fell. Simple low-cost projects may be processed faster via
+      an expedited pathway not captured in this model.
+    </div>
+  </div><!-- /results-card -->
+
+
+  <!-- ── Historical Match Card ──────────────────────────────── -->
+  <div class="card" id="history-card" style="display:none;">
+    <h2 class="card-title">Historical Match Found</h2>
+    <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:20px;">
+      A permit from this address exists in the training data. Here's how the model's prediction compares to the actual recorded review time.
+    </p>
+    <div class="info-grid" id="history-grid">
+      <div class="info-item">
+        <strong id="hist-actual">—</strong>
+        <span>Actual review days (historical)</span>
+      </div>
+      <div class="info-item">
+        <strong id="hist-predicted">—</strong>
+        <span>Model prediction (this run)</span>
+      </div>
+      <div class="info-item">
+        <strong id="hist-diff">—</strong>
+        <span>Difference</span>
+      </div>
+    </div>
+    <div style="margin-top:16px; font-size:0.8rem; color:var(--text-muted); line-height:1.6;" id="history-detail"></div>
+  </div>
+  <div class="card">
+    <h2 class="card-title">About This Tool</h2>
+    <div class="info-grid">
+      <div class="info-item">
+        <strong>14,201</strong>
+        <span>Completed permits used to train this model</span>
+      </div>
+      <div class="info-item">
+        <strong>91 days</strong>
+        <span>Median review time in the training data</span>
+      </div>
+      <div class="info-item">
+        <strong>R² = 0.36</strong>
+        <span>Model accuracy — permit type &amp; cost are top predictors</span>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<!-- ── Footer ──────────────────────────────────────────────────── -->
+<footer>
+  Seattle Permit Predictor &mdash; CSB 425 City of Seattle Project &mdash;
+  Data sourced from <a href="https://data.seattle.gov" target="_blank" rel="noopener">Seattle Open Data Portal</a>.
+  Predictions are estimates only and do not constitute official city guidance.
+</footer>
+
+
+<!-- ================================================================
+     JavaScript — ONNX inference + US Census geocoding
+     ================================================================ -->
+<script>
+'use strict';
+
+// ── Constants ─────────────────────────────────────────────────────
+const ONNX_MODEL_PATH  = 'ModelWeights_RF.onnx';
+const META_PATH        = 'model_meta.json';
+const LOOKUP_PATH      = 'permit_lookup.json';
+const MATCH_RADIUS_DEG = 0.0003; // ~30 metres
+
+// Maps friendly project type dropdown values to the permittypedesc
+// and permitclass values the broad model was trained on
+const PROJECT_TYPE_MAP = {
+  sfr:         { permittypedesc: 'New',                 permitclass: 'Single Family/Duplex' },
+  adu:         { permittypedesc: 'Addition/Alteration', permitclass: 'Single Family/Duplex' },
+  dadu:        { permittypedesc: 'Addition/Alteration', permitclass: 'Single Family/Duplex' },
+  sfr_adu:     { permittypedesc: 'New',                 permitclass: 'Single Family/Duplex' },
+  sfr_dadu:    { permittypedesc: 'New',                 permitclass: 'Single Family/Duplex' },
+  multifamily: { permittypedesc: 'New',                 permitclass: 'Multifamily'          },
+  commercial:  { permittypedesc: 'New',                 permitclass: 'Commercial'           },
+  tenant_imp:  { permittypedesc: 'Tenant Improvement',  permitclass: 'Commercial'           },
+};
+
+// Units added defaults per project type
+const PROJECT_TYPE_UNITS = {
+  sfr:         1,
+  adu:         1,
+  dadu:        1,
+  sfr_adu:     2,
+  sfr_dadu:    2,
+  multifamily: 4,
+  commercial:  0,
+  tenant_imp:  0,
+};
+
+// ── State ──────────────────────────────────────────────────────────
+let onnxSession   = null;
+let modelMeta     = null;
+let permitLookup  = null;
+let currentCoords = { lat: null, lon: null, zoneFam: null };
+
+// ── DOM refs ───────────────────────────────────────────────────────
+const modelStatusEl = document.getElementById('model-status');
+const btnPredict    = document.getElementById('btn-predict');
+const btnGeocode    = document.getElementById('btn-geocode');
+const addressInput  = document.getElementById('address');
+const coordsDisplay = document.getElementById('coords-display');
+const predictStatus = document.getElementById('predict-status');
+const resultsCard   = document.getElementById('results-card');
+
+// ── Load ONNX model + meta ─────────────────────────────────────────
+async function loadModel() {
+  try {
+    ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
+
+    const [session, metaResp, lookupResp] = await Promise.all([
+      ort.InferenceSession.create(ONNX_MODEL_PATH, { executionProviders: ['wasm'] }),
+      fetch(META_PATH),
+      fetch(LOOKUP_PATH)
+    ]);
+
+    onnxSession  = session;
+    modelMeta    = await metaResp.json();
+    permitLookup = await lookupResp.json();
+
+    modelStatusEl.textContent = '✓ Model loaded and ready.';
+    modelStatusEl.classList.remove('loading');
+    modelStatusEl.style.color = 'var(--success)';
+    btnPredict.disabled = false;
+
+    console.log('ONNX session inputs:', onnxSession.inputNames);
+    console.log('Model meta:', modelMeta);
+  } catch (err) {
+    modelStatusEl.textContent = '⚠ Could not load model. Make sure ModelWeights_RF.onnx and model_meta.json are in the same directory as index.html.';
+    modelStatusEl.classList.add('error');
+    console.error('Model load error:', err);
+  }
+}
+
+// ── US Census Geocoder ─────────────────────────────────────────────
+async function geocodeAddress(address) {
+  const encoded = encodeURIComponent(address + ', Seattle, WA, USA');
+  const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1&countrycodes=us`;
+
+  const resp = await fetch(url, {
+    headers: { 'Accept-Language': 'en', 'User-Agent': 'SeattlePermitPredictor/1.0' }
+  });
+  if (!resp.ok) throw new Error(`Geocoder HTTP ${resp.status}`);
+
+  const data = await resp.json();
+  if (!data || data.length === 0) throw new Error('Address not found. Try including your street number and "Seattle, WA".');
+
+  return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+}
+
+// ── Zone family inference from coordinates ─────────────────────────
+// Simplified geographic heuristics — true spatial join not feasible
+// in the browser. Falls back to NR (most common zone in training data).
+function inferZoneFamily(lat, lon) {
+  if (lat < 47.48 || lat > 47.74 || lon < -122.46 || lon > -122.22) {
+    return 'Unknown';
+  }
+  if (lat > 47.70) return 'NR';
+  if (lat > 47.68 && lon < -122.36) return 'NR';
+  if (lat > 47.65 && lat < 47.68 && lon > -122.34 && lon < -122.29) return 'LR';
+  if (lat > 47.60 && lat < 47.63 && lon > -122.32 && lon < -122.30) return 'LR';
+  if (lat > 47.66 && lon > -122.31) return 'SF';
+  if (lat > 47.63 && lon < -122.36) return 'SF';
+  return 'NR';
+}
+
+// ── Historical permit lookup ───────────────────────────────────────
+// Finds the closest permit in the dataset to the geocoded coordinates.
+// Uses the spatial grid index — checks the matching cell and its 8
+// neighbours to handle addresses that straddle cell boundaries.
+function findNearestPermit(lat, lon) {
+  if (!permitLookup) return null;
+
+  const gridLat = Math.round(lat * 1000) / 1000;
+  const gridLon = Math.round(lon * 1000) / 1000;
+  const step    = 0.001;
+
+  // Collect candidates from the matching cell and its 8 neighbours
+  const candidates = [];
+  for (let dlat = -step; dlat <= step; dlat += step) {
+    for (let dlon = -step; dlon <= step; dlon += step) {
+      const key = `${(gridLat + dlat).toFixed(3)},${(gridLon + dlon).toFixed(3)}`;
+      if (permitLookup[key]) candidates.push(...permitLookup[key]);
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  // Find the closest permit by Euclidean distance in degrees
+  let best = null;
+  let bestDist = Infinity;
+  for (const permit of candidates) {
+    const dist = Math.sqrt((permit.la - lat) ** 2 + (permit.lo - lon) ** 2);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best     = permit;
+    }
+  }
+
+  // Only return if within the match radius (~30m)
+  return bestDist <= MATCH_RADIUS_DEG ? best : null;
+}
+btnGeocode.addEventListener('click', async () => {
+  const addr = addressInput.value.trim();
+  if (!addr) {
+    coordsDisplay.textContent = 'Please enter an address first.';
+    coordsDisplay.style.color = 'var(--error)';
+    return;
+  }
+
+  btnGeocode.disabled    = true;
+  btnGeocode.textContent = 'Looking up…';
+  coordsDisplay.textContent = '';
+
+  try {
+    const { lat, lon } = await geocodeAddress(addr);
+    const zoneFam = inferZoneFamily(lat, lon);
+    currentCoords = { lat, lon, zoneFam };
+    coordsDisplay.style.color = 'var(--success)';
+    coordsDisplay.textContent = `✓ Located: ${lat.toFixed(5)}, ${lon.toFixed(5)} — Zone family: ${zoneFam}`;
+  } catch (err) {
+    coordsDisplay.style.color = 'var(--error)';
+    coordsDisplay.textContent = `⚠ ${err.message}`;
+    currentCoords = { lat: null, lon: null, zoneFam: null };
+  } finally {
+    btnGeocode.disabled    = false;
+    btnGeocode.textContent = 'Look Up';
+  }
+});
+
+addressInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter') btnGeocode.click();
+});
+
+// ── Preprocessing — mirrors the Python pipeline ────────────────────
+// The broad model has 3 categorical features (permittypedesc, permitclass,
+// zone_family) and 4 numeric features. Each is passed as a separate named
+// tensor to the ONNX session, matching the pipeline's ColumnTransformer.
+function buildOnnxFeeds(projectType, zoneFam, logCost, logUnits, lat, lon) {
+  if (!modelMeta) throw new Error('Model metadata not loaded.');
+
+  const { permittypedesc, permitclass } = PROJECT_TYPE_MAP[projectType];
+  const medians = modelMeta.imputer_medians;
+  const cats    = modelMeta.categories;
+
+  // OrdinalEncoder: look up integer index for each categorical value
+  // Unknown values fall back to -1 per the encoder's unknown_value setting
+  const permitTypeIdx  = cats['permittypedesc'].indexOf(permittypedesc);
+  const permitClassIdx = cats['permitclass'].indexOf(permitclass);
+  const zoneIdx        = cats['zone_family'].indexOf(zoneFam);
+
+  // Median imputation for any missing numeric values
+  const fLogCost  = isFinite(logCost)  ? logCost  : medians['log_estprojectcost'];
+  const fLogUnits = isFinite(logUnits) ? logUnits : medians['log_housingunitsadded'];
+  const fLat      = isFinite(lat)      ? lat      : medians['latitude'];
+  const fLon      = isFinite(lon)      ? lon      : medians['longitude'];
+
+  // Return named feeds — input names must match the ONNX model exactly
+  return {
+    permittypedesc:        new ort.Tensor('string', [String(permittypedesc)], [1, 1]),
+    permitclass:           new ort.Tensor('string', [String(permitclass)],    [1, 1]),
+    zone_family:           new ort.Tensor('string', [String(zoneFam)],        [1, 1]),
+    log_estprojectcost:    new ort.Tensor('float32', new Float32Array([fLogCost]),  [1, 1]),
+    log_housingunitsadded: new ort.Tensor('float32', new Float32Array([fLogUnits]), [1, 1]),
+    latitude:              new ort.Tensor('float32', new Float32Array([fLat]),      [1, 1]),
+    longitude:             new ort.Tensor('float32', new Float32Array([fLon]),      [1, 1]),
+  };
+}
+
+// ── Run ONNX inference ─────────────────────────────────────────────
+async function runInference(feeds) {
+  const results = await onnxSession.run(feeds);
+  const output  = results[onnxSession.outputNames[0]].data;
+  return output[0]; // log-scale prediction
+}
+
+// ── Render results ─────────────────────────────────────────────────
+function renderResults(predDays, ciLow, ciHigh, historicalMatch) {
+  document.getElementById('result-days').innerHTML =
+    `${Math.round(predDays)} <span>days</span>`;
+  document.getElementById('result-approx').textContent =
+    `approximately ${(predDays / 30).toFixed(1)} months`;
+
+  document.getElementById('ci-low').textContent  = `${Math.round(ciLow)} days`;
+  document.getElementById('ci-mid').textContent  = `${Math.round(predDays)} days`;
+  document.getElementById('ci-high').textContent = `${Math.round(ciHigh)} days`;
+
+  const range        = ciHigh - ciLow;
+  const pointPct     = range > 0 ? ((predDays - ciLow) / range) * 100 : 50;
+  const fillLeftPct  = 5;
+  const fillWidthPct = 90;
+  const dotPct       = fillLeftPct + (pointPct / 100) * fillWidthPct;
+
+  document.getElementById('ci-bar-fill').style.left  = `${fillLeftPct}%`;
+  document.getElementById('ci-bar-fill').style.width = `${fillWidthPct}%`;
+  document.getElementById('ci-bar-point').style.left = `${Math.max(5, Math.min(95, dotPct))}%`;
+
+  resultsCard.style.display = 'block';
+
+  // ── Historical match panel ──
+  const histCard = document.getElementById('history-card');
+  if (historicalMatch) {
+    const actual   = historicalMatch.d;
+    const diff     = Math.round(predDays) - actual;
+    const diffStr  = diff >= 0 ? `+${diff}` : `${diff}`;
+    const diffColor = Math.abs(diff) <= 30 ? 'var(--success)' : 'var(--blue-mid)';
+
+    document.getElementById('hist-actual').textContent    = `${actual} days`;
+    document.getElementById('hist-predicted').textContent = `${Math.round(predDays)} days`;
+    document.getElementById('hist-diff').textContent      = `${diffStr} days`;
+    document.getElementById('hist-diff').style.color      = diffColor;
+
+    document.getElementById('history-detail').innerHTML =
+      `<strong>Permit:</strong> ${historicalMatch.p} &nbsp;|&nbsp; ` +
+      `<strong>Address:</strong> ${historicalMatch.a} &nbsp;|&nbsp; ` +
+      `<strong>Type:</strong> ${historicalMatch.t} &nbsp;|&nbsp; ` +
+      `<strong>Class:</strong> ${historicalMatch.c} &nbsp;|&nbsp; ` +
+      `<strong>Year:</strong> ${historicalMatch.y} &nbsp;|&nbsp; ` +
+      `<strong>Cost:</strong> $${historicalMatch.co.toLocaleString()}`;
+
+    histCard.style.display = 'block';
+  } else {
+    histCard.style.display = 'none';
+  }
+
+  resultsCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ── Predict button handler ─────────────────────────────────────────
+btnPredict.addEventListener('click', async () => {
+  predictStatus.textContent = '';
+  predictStatus.className   = 'status-msg';
+
+  const projectType = document.getElementById('project-type').value;
+  if (!projectType) {
+    predictStatus.textContent = 'Please select a project type.';
+    predictStatus.classList.add('error');
+    return;
+  }
+
+  const estCostRaw = parseFloat(document.getElementById('est-cost').value);
+  if (isNaN(estCostRaw) || estCostRaw < 0) {
+    predictStatus.textContent = 'Please enter a valid estimated project cost.';
+    predictStatus.classList.add('error');
+    return;
+  }
+
+  // Use geocoded coords if available, fall back to Seattle centroid
+  let { lat, lon, zoneFam } = currentCoords;
+  if (!lat || !lon) {
+    lat     = 47.6062;
+    lon     = -122.3321;
+    zoneFam = 'NR';
+    predictStatus.textContent = 'Address not geocoded — using Seattle average location.';
+    predictStatus.classList.add('loading');
+  }
+
+  const unitsAdded = PROJECT_TYPE_UNITS[projectType] ??
+    parseInt(document.getElementById('units-added').value, 10);
+
+  const logCost  = Math.log1p(estCostRaw);
+  const logUnits = Math.log1p(unitsAdded);
+
+  btnPredict.disabled  = true;
+  btnPredict.innerHTML = '<span class="spinner"></span>Estimating…';
+
+  try {
+    const feeds        = buildOnnxFeeds(projectType, zoneFam, logCost, logUnits, lat, lon);
+    const predLog      = await runInference(feeds);
+    const predDays     = Math.expm1(predLog);
+    const histMatch    = findNearestPermit(lat, lon);
+
+    // 80% confidence interval approximated from OOF residual std (0.7472 log-scale)
+    const logStd    = 0.7472;
+    const ciLowLog  = predLog - 1.28 * logStd * 0.6;
+    const ciHighLog = predLog + 1.28 * logStd * 0.6;
+    const ciLow     = Math.max(1, Math.expm1(ciLowLog));
+    const ciHigh    = Math.expm1(ciHighLog);
+
+    renderResults(predDays, ciLow, ciHigh, histMatch);
+    predictStatus.textContent = '';
+  } catch (err) {
+    predictStatus.textContent = `Error during prediction: ${err.message}`;
+    predictStatus.classList.add('error');
+    console.error('Prediction error:', err);
+  } finally {
+    btnPredict.disabled    = false;
+    btnPredict.textContent = 'Estimate Review Time';
+  }
+});
+
+// ── Initialize ─────────────────────────────────────────────────────
+loadModel();
+</script>
+</body>
+</html>

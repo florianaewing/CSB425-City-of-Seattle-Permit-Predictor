@@ -1,0 +1,61 @@
+{
+  "cat_features": [
+    "permittypedesc",
+    "permitclass",
+    "zone_family"
+  ],
+  "num_features": [
+    "log_estprojectcost",
+    "log_housingunitsadded",
+    "latitude",
+    "longitude"
+  ],
+  "categories": {
+    "permittypedesc": [
+      "Addition/Alteration",
+      "Change of Use Only - No Construction",
+      "Deconstruction",
+      "Demolition",
+      "New",
+      "Unknown"
+    ],
+    "permitclass": [
+      "Commercial",
+      "Institutional",
+      "Multifamily",
+      "Single Family/Duplex",
+      "Vacant Land"
+    ],
+    "zone_family": [
+      "C1",
+      "C2",
+      "DH",
+      "DMC",
+      "DOC",
+      "HR",
+      "IB",
+      "IC",
+      "IDM",
+      "IG",
+      "LR",
+      "MIO",
+      "MR",
+      "NC",
+      "NR",
+      "Other",
+      "PMM",
+      "PSM",
+      "SF",
+      "SM",
+      "Unknown"
+    ]
+  },
+  "imputer_medians": {
+    "log_estprojectcost": 12.018229874847403,
+    "log_housingunitsadded": 0.0,
+    "latitude": 47.64020766,
+    "longitude": -122.334014005
+  },
+  "unknown_value": -1,
+  "note": "OrdinalEncoder: category index = position in each categories list. Unknown values get -1."
+}
