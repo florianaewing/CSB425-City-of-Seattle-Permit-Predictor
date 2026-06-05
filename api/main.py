@@ -38,10 +38,12 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        'https://florianaewing.github.io',
-        'http://localhost:8000',
-        'http://127.0.0.1:8000',
-        'http://localhost:3000',
+    'https://florianaewing.github.io',
+    'https://florianaewing.github.io/CSB425-City-of-Seattle-Permit-Predictor',
+    'https://florianaewing.github.io/CSB425-City-of-Seattle-Permit-Predictor/',
+    'http://localhost:8000',
+    'http://127.0.0.1:8000',
+    'http://localhost:3000',
     ],
     allow_credentials=True,
     allow_methods=['*'],
