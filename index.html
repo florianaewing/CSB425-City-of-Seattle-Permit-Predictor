@@ -74,19 +74,6 @@
         </div>
       </div>
 
-      <!-- Estimated Cost -->
-      <div class="form-group">
-        <label for="est-cost">Estimated Project Cost ($)</label>
-        <input
-          type="number"
-          id="est-cost"
-          placeholder="e.g. 350000"
-          min="0"
-          step="1000"
-        />
-        <p class="hint">Total construction cost estimate.</p>
-      </div>
-
       <!-- Units Added -->
       <div class="form-group">
         <label for="units-added">Housing Units Added</label>
@@ -120,7 +107,7 @@
     </div>
 
     <div class="ci-section">
-      <p class="ci-label">80% Confidence Interval</p>
+      <p class="ci-label">Optimistic · Typical · Pessimistic</p>
       <div class="ci-bar-wrap" id="ci-bar-wrap">
         <div class="ci-bar-fill" id="ci-bar-fill"></div>
         <div class="ci-bar-point" id="ci-bar-point"></div>
@@ -134,11 +121,11 @@
 
     <div class="disclaimer">
       <strong>Note:</strong> This estimate is based on historical permit data for
-      building permits in Seattle (2020–2024). Actual review
-      times vary based on plan completeness, reviewer workload, and correction
-      cycles. The 80% confidence interval reflects the range within which 80% of
-      similar permits fell. Simple low-cost projects may be processed faster via
-      an expedited pathway not captured in this model.
+      building permits in Seattle (2020–2024). The typical estimate is the median
+      outcome for similar permits. Optimistic reflects the 10th percentile (faster
+      than 90% of similar permits) and pessimistic reflects the 90th percentile.
+      Actual review times vary based on plan completeness, reviewer workload, and
+      correction cycles.
     </div>
   </div><!-- /results-card -->
 
@@ -165,23 +152,6 @@
     </div>
     <div style="margin-top:16px; font-size:0.8rem; color:var(--text-muted); line-height:1.6;" id="history-detail"></div>
   </div>
-  <div class="card">
-    <h2 class="card-title">About This Tool</h2>
-    <div class="info-grid">
-      <div class="info-item">
-        <strong>14,201</strong>
-        <span>Completed permits used to train this model</span>
-      </div>
-      <div class="info-item">
-        <strong>91 days</strong>
-        <span>Median review time in the training data</span>
-      </div>
-      <div class="info-item">
-        <strong>R² = 0.36</strong>
-        <span>Model accuracy — permit type &amp; cost are top predictors</span>
-      </div>
-    </div>
-  </div>
 
 </main>
 
@@ -200,10 +170,9 @@
 'use strict';
 
 // ── Constants ─────────────────────────────────────────────────────
-const ONNX_MODEL_PATH  = 'ModelWeights_RF.onnx';
-const META_PATH        = 'model_meta.json';
-const LOOKUP_PATH      = 'permit_lookup.json';
-const MATCH_RADIUS_DEG = 0.00001; // ~10 metres
+const API_URL       = 'https://seattle-permit-predictor.onrender.com';
+const LOOKUP_PATH   = 'permit_lookup.json';
+const MATCH_RADIUS_DEG = 0.0001; // ~10 metres
 
 // Maps friendly project type dropdown values to the permittypedesc
 // and permitclass values the broad model was trained on
@@ -231,9 +200,8 @@ const PROJECT_TYPE_UNITS = {
 };
 
 // ── State ──────────────────────────────────────────────────────────
-let onnxSession   = null;
-let modelMeta     = null;
 let permitLookup  = null;
+let serverAwake   = false;
 let currentCoords = { lat: null, lon: null, zoneFam: null };
 
 // ── DOM refs ───────────────────────────────────────────────────────
@@ -245,49 +213,64 @@ const coordsDisplay = document.getElementById('coords-display');
 const predictStatus = document.getElementById('predict-status');
 const resultsCard   = document.getElementById('results-card');
 
-// ── Load ONNX model + meta ─────────────────────────────────────────
+// ── Load permit lookup + warm up API server ────────────────────────
 async function loadModel() {
   try {
-    ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/';
-
-    const [session, metaResp, lookupResp] = await Promise.all([
-      ort.InferenceSession.create(ONNX_MODEL_PATH, { executionProviders: ['wasm'] }),
-      fetch(META_PATH),
-      fetch(LOOKUP_PATH)
-    ]);
-
-    onnxSession  = session;
-    modelMeta    = await metaResp.json();
+    // Load permit lookup index
+    const lookupResp = await fetch(LOOKUP_PATH);
     permitLookup = await lookupResp.json();
 
-    modelStatusEl.textContent = '✓ Model loaded and ready.';
+    // Ping the API to wake it up (Render free tier spins down after inactivity)
+    modelStatusEl.textContent = '⏳ Waking up prediction server, please wait…';
+    modelStatusEl.style.color = 'var(--blue-mid)';
+
+    const healthResp = await fetch(`${API_URL}/health`, { method: 'GET' });
+    if (!healthResp.ok) throw new Error(`Server responded with ${healthResp.status}`);
+
+    serverAwake = true;
+    modelStatusEl.textContent = '✓ Prediction server ready.';
     modelStatusEl.classList.remove('loading');
     modelStatusEl.style.color = 'var(--success)';
     btnPredict.disabled = false;
 
-    console.log('ONNX session inputs:', onnxSession.inputNames);
-    console.log('Model meta:', modelMeta);
   } catch (err) {
-    modelStatusEl.textContent = '⚠ Could not load model. Make sure ModelWeights_RF.onnx and model_meta.json are in the same directory as index.html.';
-    modelStatusEl.classList.add('error');
-    console.error('Model load error:', err);
+    // Server may just be waking up — retry once after 15 seconds
+    modelStatusEl.textContent = '⏳ Server is waking up, retrying in 15 seconds…';
+    modelStatusEl.style.color = 'var(--blue-mid)';
+    setTimeout(async () => {
+      try {
+        const healthResp = await fetch(`${API_URL}/health`);
+        if (healthResp.ok) {
+          serverAwake = true;
+          modelStatusEl.textContent = '✓ Prediction server ready.';
+          modelStatusEl.style.color = 'var(--success)';
+          btnPredict.disabled = false;
+        } else {
+          throw new Error('Server unavailable');
+        }
+      } catch (retryErr) {
+        modelStatusEl.textContent = '⚠ Could not reach prediction server. Try refreshing the page.';
+        modelStatusEl.classList.add('error');
+        console.error('Server warmup failed:', retryErr);
+      }
+    }, 15000);
   }
 }
 
 // ── US Census Geocoder ─────────────────────────────────────────────
 async function geocodeAddress(address) {
-  const encoded = encodeURIComponent(address + ', Seattle, WA, USA');
-  const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1&countrycodes=us`;
+  const encoded = encodeURIComponent(address);
+  const url = `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?address=${encoded}&benchmark=Public_AR_Current&format=json`;
 
-  const resp = await fetch(url, {
-    headers: { 'Accept-Language': 'en', 'User-Agent': 'SeattlePermitPredictor/1.0' }
-  });
+  const resp = await fetch(url);
   if (!resp.ok) throw new Error(`Geocoder HTTP ${resp.status}`);
 
   const data = await resp.json();
-  if (!data || data.length === 0) throw new Error('Address not found. Try including your street number and "Seattle, WA".');
+  const matches = data?.result?.addressMatches;
+  if (!matches || matches.length === 0) throw new Error('Address not found. Try including "Seattle, WA".');
 
-  return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
+  const coords = matches[0].coordinates;
+  return { lat: parseFloat(coords.y), lon: parseFloat(coords.x) };
 }
 
 // ── Zone family inference from coordinates ─────────────────────────
@@ -374,67 +357,61 @@ addressInput.addEventListener('keydown', e => {
   if (e.key === 'Enter') btnGeocode.click();
 });
 
-// ── Preprocessing — mirrors the Python pipeline ────────────────────
-// The broad model has 3 categorical features (permittypedesc, permitclass,
-// zone_family) and 4 numeric features. Each is passed as a separate named
-// tensor to the ONNX session, matching the pipeline's ColumnTransformer.
-function buildOnnxFeeds(projectType, zoneFam, logCost, logUnits, lat, lon) {
-  if (!modelMeta) throw new Error('Model metadata not loaded.');
-
+// ── Call prediction API ────────────────────────────────────────────
+async function runPrediction(projectType, lat, lon, zoneFam, logUnits) {
   const { permittypedesc, permitclass } = PROJECT_TYPE_MAP[projectType];
-  const medians = modelMeta.imputer_medians;
-  const cats    = modelMeta.categories;
+  const now = new Date();
 
-  // OrdinalEncoder: look up integer index for each categorical value
-  // Unknown values fall back to -1 per the encoder's unknown_value setting
-  const permitTypeIdx  = cats['permittypedesc'].indexOf(permittypedesc);
-  const permitClassIdx = cats['permitclass'].indexOf(permitclass);
-  const zoneIdx        = cats['zone_family'].indexOf(zoneFam);
-
-  // Median imputation for any missing numeric values
-  const fLogCost  = isFinite(logCost)  ? logCost  : medians['log_estprojectcost'];
-  const fLogUnits = isFinite(logUnits) ? logUnits : medians['log_housingunitsadded'];
-  const fLat      = isFinite(lat)      ? lat      : medians['latitude'];
-  const fLon      = isFinite(lon)      ? lon      : medians['longitude'];
-
-  // Return named feeds — input names must match the ONNX model exactly
-  return {
-    permittypedesc:        new ort.Tensor('string', [String(permittypedesc)], [1, 1]),
-    permitclass:           new ort.Tensor('string', [String(permitclass)],    [1, 1]),
-    zone_family:           new ort.Tensor('string', [String(zoneFam)],        [1, 1]),
-    log_estprojectcost:    new ort.Tensor('float32', new Float32Array([fLogCost]),  [1, 1]),
-    log_housingunitsadded: new ort.Tensor('float32', new Float32Array([fLogUnits]), [1, 1]),
-    latitude:              new ort.Tensor('float32', new Float32Array([fLat]),      [1, 1]),
-    longitude:             new ort.Tensor('float32', new Float32Array([fLon]),      [1, 1]),
+  const payload = {
+    permittypedesc,
+    permitclass,
+    zone_family:          zoneFam,
+    review_complexity_max:'Unknown',
+    latitude:             lat,
+    longitude:            lon,
+    housingunitsadded:    Math.expm1(logUnits),
+    app_year:             now.getFullYear(),
+    app_month:            now.getMonth() + 1,
   };
-}
 
-// ── Run ONNX inference ─────────────────────────────────────────────
-async function runInference(feeds) {
-  const results = await onnxSession.run(feeds);
-  const output  = results[onnxSession.outputNames[0]].data;
-  return output[0]; // log-scale prediction
+  const resp = await fetch(`${API_URL}/predict`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(payload),
+  });
+
+  if (!resp.ok) {
+    const err = await resp.json();
+    throw new Error(err.detail || `API error ${resp.status}`);
+  }
+
+  return await resp.json();
 }
 
 // ── Render results ─────────────────────────────────────────────────
-function renderResults(predDays, ciLow, ciHigh, historicalMatch) {
+function renderResults(prediction, historicalMatch) {
+  const { optimistic, typical, pessimistic } = prediction;
+
+  // Main display — typical estimate
   document.getElementById('result-days').innerHTML =
-    `${Math.round(predDays)} <span>days</span>`;
+    `${typical.days} <span>days</span>`;
   document.getElementById('result-approx').textContent =
-    `approximately ${(predDays / 30).toFixed(1)} months`;
+    `${typical.months} months — typical estimate`;
 
-  document.getElementById('ci-low').textContent  = `${Math.round(ciLow)} days`;
-  document.getElementById('ci-mid').textContent  = `${Math.round(predDays)} days`;
-  document.getElementById('ci-high').textContent = `${Math.round(ciHigh)} days`;
+  // Confidence interval relabelled as optimistic / pessimistic
+  document.getElementById('ci-low').textContent  = `Optimistic: ${optimistic.label}`;
+  document.getElementById('ci-mid').textContent  = `Typical: ${typical.label}`;
+  document.getElementById('ci-high').textContent = `Pessimistic: ${pessimistic.label}`;
 
-  const range        = ciHigh - ciLow;
-  const pointPct     = range > 0 ? ((predDays - ciLow) / range) * 100 : 50;
-  const fillLeftPct  = 5;
-  const fillWidthPct = 90;
-  const dotPct       = fillLeftPct + (pointPct / 100) * fillWidthPct;
+  // CI bar — position dot at typical within optimistic–pessimistic range
+  const range    = pessimistic.days - optimistic.days;
+  const pointPct = range > 0 ? ((typical.days - optimistic.days) / range) * 100 : 50;
+  const fillLeft = 5;
+  const fillWidth= 90;
+  const dotPct   = fillLeft + (pointPct / 100) * fillWidth;
 
-  document.getElementById('ci-bar-fill').style.left  = `${fillLeftPct}%`;
-  document.getElementById('ci-bar-fill').style.width = `${fillWidthPct}%`;
+  document.getElementById('ci-bar-fill').style.left  = `${fillLeft}%`;
+  document.getElementById('ci-bar-fill').style.width = `${fillWidth}%`;
   document.getElementById('ci-bar-point').style.left = `${Math.max(5, Math.min(95, dotPct))}%`;
 
   resultsCard.style.display = 'block';
@@ -442,13 +419,13 @@ function renderResults(predDays, ciLow, ciHigh, historicalMatch) {
   // ── Historical match panel ──
   const histCard = document.getElementById('history-card');
   if (historicalMatch) {
-    const actual   = historicalMatch.d;
-    const diff     = Math.round(predDays) - actual;
-    const diffStr  = diff >= 0 ? `+${diff}` : `${diff}`;
+    const actual    = historicalMatch.d;
+    const diff      = typical.days - actual;
+    const diffStr   = diff >= 0 ? `+${diff}` : `${diff}`;
     const diffColor = Math.abs(diff) <= 30 ? 'var(--success)' : 'var(--blue-mid)';
 
     document.getElementById('hist-actual').textContent    = `${actual} days`;
-    document.getElementById('hist-predicted').textContent = `${Math.round(predDays)} days`;
+    document.getElementById('hist-predicted').textContent = typical.label;
     document.getElementById('hist-diff').textContent      = `${diffStr} days`;
     document.getElementById('hist-diff').style.color      = diffColor;
 
@@ -480,13 +457,6 @@ btnPredict.addEventListener('click', async () => {
     return;
   }
 
-  const estCostRaw = parseFloat(document.getElementById('est-cost').value);
-  if (isNaN(estCostRaw) || estCostRaw < 0) {
-    predictStatus.textContent = 'Please enter a valid estimated project cost.';
-    predictStatus.classList.add('error');
-    return;
-  }
-
   // Use geocoded coords if available, fall back to Seattle centroid
   let { lat, lon, zoneFam } = currentCoords;
   if (!lat || !lon) {
@@ -500,26 +470,16 @@ btnPredict.addEventListener('click', async () => {
   const unitsAdded = PROJECT_TYPE_UNITS[projectType] ??
     parseInt(document.getElementById('units-added').value, 10);
 
-  const logCost  = Math.log1p(estCostRaw);
   const logUnits = Math.log1p(unitsAdded);
 
   btnPredict.disabled  = true;
   btnPredict.innerHTML = '<span class="spinner"></span>Estimating…';
 
   try {
-    const feeds        = buildOnnxFeeds(projectType, zoneFam, logCost, logUnits, lat, lon);
-    const predLog      = await runInference(feeds);
-    const predDays     = Math.expm1(predLog);
-    const histMatch    = findNearestPermit(lat, lon);
+    const prediction = await runPrediction(projectType, lat, lon, zoneFam, logUnits);
+    const histMatch  = findNearestPermit(lat, lon, addressInput.value.trim());
 
-    // 80% confidence interval approximated from OOF residual std (0.7472 log-scale)
-    const logStd    = 0.7472;
-    const ciLowLog  = predLog - 1.28 * logStd * 0.6;
-    const ciHighLog = predLog + 1.28 * logStd * 0.6;
-    const ciLow     = Math.max(1, Math.expm1(ciLowLog));
-    const ciHigh    = Math.expm1(ciHighLog);
-
-    renderResults(predDays, ciLow, ciHigh, histMatch);
+    renderResults(prediction, histMatch);
     predictStatus.textContent = '';
   } catch (err) {
     predictStatus.textContent = `Error during prediction: ${err.message}`;

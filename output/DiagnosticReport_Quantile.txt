@@ -1,0 +1,113 @@
+======================================================================
+  SEATTLE PERMIT PREDICTOR — QUANTILE MODEL DIAGNOSTIC REPORT
+  Generated: 2026-06-04 17:12:12
+======================================================================
+
+[ 1 ] DATASET
+----------------------------------------------------------------------
+  Rows in modeling population : 14,201
+  With comment features       : 665 (4.7%)
+  Categorical features (4)    : ['permittypedesc', 'permitclass', 'zone_family', 'review_complexity_max']
+  Numeric features (7)        : ['latitude', 'longitude', 'log_housingunitsadded', 'app_year', 'app_month', 'comment_n_distinct_cycles', 'comment_n_rows']
+  Target                      : log(1 + totaldaysplanreview)
+  Quantiles modeled           : optimistic=0.10, typical=0.50, pessimistic=0.90
+
+[ 2 ] BASELINE QUANTILE MODEL — 5-FOLD CROSS VALIDATION
+----------------------------------------------------------------------
+  Fold   Coverage   MAE(typ,days)   Pinball(opt)   Pinball(typ)   Pinball(pes)
+  ------------------------------------------------------------------------
+     1     0.7744            69.9         0.1164         0.2675         0.1227
+     2     0.7585            73.6         0.1151         0.2686         0.1271
+     3     0.7697            73.0         0.1161         0.2682         0.1264
+     4     0.7609            72.0         0.1144         0.2658         0.1234
+     5     0.7701            69.6         0.1177         0.2684         0.1250
+  ------------------------------------------------------------------------
+  MEAN     0.7667            71.6         0.1159         0.2677         0.1249
+   STD     0.0067             1.8         0.0013         0.0011         0.0019
+
+[ 3 ] HYPERPARAMETER TUNING — GRID SEARCH RESULTS
+----------------------------------------------------------------------
+  Best median pinball score: nan
+  Best parameters:
+    learning_rate             0.03
+    max_depth                 4
+    min_child_samples         10
+    n_estimators              300
+    num_leaves                15
+
+[ 4 ] TUNED QUANTILE MODEL — 5-FOLD CROSS VALIDATION
+----------------------------------------------------------------------
+  Fold   Coverage   MAE(typ,days)   Pinball(opt)   Pinball(typ)   Pinball(pes)
+  ------------------------------------------------------------------------
+     1     0.7913            70.9         0.1169         0.2704         0.1244
+     2     0.7845            74.9         0.1167         0.2727         0.1276
+     3     0.7923            74.1         0.1176         0.2714         0.1273
+     4     0.7856            73.6         0.1153         0.2705         0.1253
+     5     0.7842            71.1         0.1191         0.2729         0.1264
+  ------------------------------------------------------------------------
+  MEAN     0.7875            72.9         0.1171         0.2716         0.1262
+   STD     0.0039             1.8         0.0014         0.0012         0.0013
+
+[ 5 ] COVERAGE AND ACCURACY BY PERMIT TYPE
+----------------------------------------------------------------------
+                                            n  coverage_rate  mae_days  actual_median  typical_median
+permittypedesc                                                                                     
+Addition/Alteration                   10101          0.791    62.164           72.0          72.745
+New                                    4028          0.781    99.895          216.0         213.517
+Change of Use Only - No Construction     27          0.778    55.921           97.0         103.305
+Demolition                               37          0.703    60.390           62.0          96.026
+Deconstruction                            1          0.000    40.606           23.0          63.606
+Unknown                                   7          0.000   233.833           83.0         260.725
+
+  By Permit Class:
+                            n  coverage_rate  mae_days  actual_median  typical_median
+permitclass                                                                        
+Institutional             5          0.800    83.428          259.0         167.107
+Commercial             3059          0.792    50.292           61.0          56.450
+Vacant Land              19          0.789   104.012          249.0         203.686
+Single Family/Duplex  10257          0.788    73.936          110.0          85.048
+Multifamily             861          0.770   140.674          295.0         297.694
+
+[ 6 ] EXAMPLE TIMELINE PREDICTIONS
+----------------------------------------------------------------------
+  Single-Family New Construction | SF zone
+    Optimistic  : 2.0 months (61 days)
+    Typical     : 4.3 months (132 days)
+    Pessimistic : 4.7 months (144 days)
+
+  Addition/Alteration | Single Family | NR zone
+    Optimistic  : 1.2 months (37 days)
+    Typical     : 2.3 months (71 days)
+    Pessimistic : 3.5 months (105 days)
+
+  Multifamily New Construction | LR zone
+    Optimistic  : 2.9 months (89 days)
+    Typical     : 5.2 months (158 days)
+    Pessimistic : 6.9 months (211 days)
+
+  Commercial New Construction | NC zone
+    Optimistic  : 1.4 months (43 days)
+    Typical     : 4.1 months (126 days)
+    Pessimistic : 5.9 months (179 days)
+
+[ 7 ] MODEL COMPARISON — ALL VERSIONS
+----------------------------------------------------------------------
+  Model                                       OOF R² / Coverage    MAE (days)
+  ----------------------------------------------------------------------------
+  RF — Broad                                          R²=0.3613          76.0
+  RF — Broad + Comments                               R²=0.3691          74.6
+  XGB — Broad + Comments                              R²=0.3707          75.4
+  LightGBM FeatureSel (SHAP analysis)                 R²=0.4359             —
+  Quantile Model (this notebook)                 Coverage=0.788          72.9
+
+[ 8 ] SAVED ARTIFACTS
+----------------------------------------------------------------------
+  ModelWeights_Quantile.joblib      — bundle: preprocessor + 3 quantile models
+  cv_metrics_quantile.png           — per-fold coverage and MAE bar charts
+  oof_quantile_intervals.png        — OOF interval predictions vs actual
+  shap_quantile_typical.png         — SHAP summary for typical quantile model
+  DiagnosticReport_Quantile.txt     — this report
+
+======================================================================
+  END OF REPORT
+======================================================================
