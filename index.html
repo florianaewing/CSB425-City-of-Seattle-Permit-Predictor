@@ -259,18 +259,18 @@ async function loadModel() {
 
 // ── US Census Geocoder ─────────────────────────────────────────────
 async function geocodeAddress(address) {
-  const encoded = encodeURIComponent(address);
-  const url = `https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?address=${encoded}&benchmark=Public_AR_Current&format=json`;
+  const encoded = encodeURIComponent(address + ', Seattle, WA, USA');
+  const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1&countrycodes=us`;
 
-  const resp = await fetch(url);
+  const resp = await fetch(url, {
+    headers: { 'Accept-Language': 'en', 'User-Agent': 'SeattlePermitPredictor/1.0' }
+  });
   if (!resp.ok) throw new Error(`Geocoder HTTP ${resp.status}`);
 
   const data = await resp.json();
-  const matches = data?.result?.addressMatches;
-  if (!matches || matches.length === 0) throw new Error('Address not found. Try including "Seattle, WA".');
+  if (!data || data.length === 0) throw new Error('Address not found. Try including your street number and "Seattle, WA".');
 
-  const coords = matches[0].coordinates;
-  return { lat: parseFloat(coords.y), lon: parseFloat(coords.x) };
+  return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon) };
 }
 
 // ── Zone family inference from coordinates ─────────────────────────
