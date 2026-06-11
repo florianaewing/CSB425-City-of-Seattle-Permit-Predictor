@@ -1,0 +1,202 @@
+{
+  "meta": {
+    "project": "Seattle Permit Predictor",
+    "client": "City of Seattle",
+    "course": "CSB 425 — Big Data Analytics",
+    "student": "Ariel (Flori) Ewing",
+    "github": "https://github.com/florianaewing/CSB425-City-of-Seattle-Permit-Predictor",
+    "github_pages": "https://florianaewing.github.io/CSB425-City-of-Seattle-Permit-Predictor/",
+    "render_api": "https://seattle-permit-predictor.onrender.com",
+    "last_updated": "2026-06-09",
+    "context_version": 1
+  },
+  "goal": "Given an address and project type, predict how long the permit approval process is likely to take and surface key factors driving that timeline so applicants can compare options and reduce delay risk before submitting.",
+  "repo_structure": {
+    "root": [
+      "index.html — demo webpage (GitHub Pages)",
+      "styles.css — page styling",
+      "permit_lookup.json — spatial grid index of historical permits for history card",
+      "render.yaml — Render deployment config",
+      "README.md"
+    ],
+    "api/": [
+      "main.py — FastAPI backend serving quantile model predictions",
+      "requirements.txt — pinned to scikit-learn==1.6.1",
+      ".python-version — pins Python 3.11.0 for Render",
+      "ModelWeights_Quantile.joblib — production model bundle"
+    ],
+    "data/": [
+      "master_dataset.csv — 14,201 row cleaned modeling population",
+      "building_permits.csv — full raw Seattle permits (post-2000 used for permit_lookup)",
+      "plan_comments.csv — 26,299 rows, 707 unique permits (partial public export)",
+      "comment_features.csv — per-permit comment features extracted by CommentFeatures.ipynb"
+    ],
+    "output/": [
+      "ModelWeights_RF.joblib — broad RF model (original)",
+      "ModelWeights_RF_Comments.joblib — RF + comment features",
+      "ModelWeights_XGB_Comments.joblib — XGBoost + comment features",
+      "ModelWeights_Quantile.joblib — PRODUCTION: LightGBM quantile bundle",
+      "feature_selection_results.csv — ranked feature recommendations from SHAP analysis",
+      "DiagnosticReport_RF.txt",
+      "DiagnosticReport_RF_Comments.txt",
+      "DiagnosticReport_XGB_Comments.txt",
+      "DiagnosticReport_Quantile.txt",
+      "DiagnosticReport_FeatureSelection.txt",
+      "DiagnosticReport_CommentFeatures.txt"
+    ],
+    "notebooks/": [
+      "cleaned_data.ipynb — data cleaning pipeline",
+      "seattle_permit_eda.ipynb — exploratory data analysis",
+      "CommentFeatures.ipynb — comment feature extraction from plan_comments.csv",
+      "FeatureSelection.ipynb — two-stage MI + SHAP feature selection",
+      "PermitPredictor_RF.ipynb — broad RF model (focused SF/ADU/DADU version also exists)",
+      "PermitPredictor_RF_Comments.ipynb — RF + comment features",
+      "PermitPredictor_XGB_Comments.ipynb — XGBoost + comment features",
+      "PermitPredictor_Quantile.ipynb — PRODUCTION quantile model",
+      "Corrections-Letters-v5.ipynb — PDF correction letter extraction pipeline",
+      "convert_to_onnx.ipynb — converts joblib to ONNX (used for older RF models, not quantile)"
+    ],
+    "scripts/": [
+      "generate_permit_lookup.py — rebuilds permit_lookup.json from full building_permits.csv"
+    ]
+  },
+  "data": {
+    "raw_sources": {
+      "building_permits": {"rows": 189295, "source": "Seattle Open Data Portal", "identifier": "76t5-zqzr"},
+      "plan_review": {"rows": 253703, "source": "Seattle Open Data Portal"},
+      "plan_comments": {"rows": 26299, "unique_permits": 707, "source": "Seattle Open Data Portal — PARTIAL EXPORT", "identifier": "e285-aq8h"}
+    },
+    "modeling_population": {
+      "rows": 14201,
+      "filters": ["post-2019 (applieddate >= 2020)", "non-null totaldaysplanreview", "review time > 0", "review time <= 1095 days", "app_year < 2026"],
+      "target": "log(1 + totaldaysplanreview)",
+      "target_col": "log_target",
+      "median_review_days": 91,
+      "notes": "9060 completed permits missing review time excluded — field inspection pathway (no recorded review time)"
+    },
+    "comment_features_coverage": "665 of 14201 permits (4.7%)"
+  },
+  "liaison_guidance": {
+    "estprojectcost": "EXCLUDED — not known by applicant at submission time",
+    "dwellingunittype": "EXCLUDED from modeling — inaccurate data. OK to use as population filter only",
+    "housingcategory": "EXCLUDED — assigned post-build, not available at submission",
+    "reviewpriority": "Non-default entries excluded from modeling population",
+    "housingunitsadded/removed/net": "Use these instead of housingcategory for unit counts",
+    "plan_comments_coverage": "Low coverage due to partial export. Full dataset available via Corrections-Letters-v5.ipynb PDF extraction pipeline",
+    "field_inspection_permits": "Completed permits with null review time are small projects subject to field inspection — complete in less than a day"
+  },
+  "leakage_fields": [
+    "total_review_cycles", "n_correction_cycles", "any_corrections_required",
+    "n_reviewers_assigned", "n_review_types", "has_rejection",
+    "daysplanreviewcity", "daysinitialplanreview", "daysoutcorrections",
+    "numberreviewcycles", "daysissuepermitcity", "estprojectcost", "log_estprojectcost"
+  ],
+  "models": {
+    "production": {
+      "name": "Quantile LightGBM",
+      "file": "ModelWeights_Quantile.joblib",
+      "notebook": "PermitPredictor_Quantile.ipynb",
+      "architecture": "Three LightGBM models (alpha=0.10, 0.50, 0.90) with quantile loss. Preprocessor + models stored as bundle dict.",
+      "bundle_keys": ["preprocessor", "models", "feature_names", "cat_features", "num_features", "quantiles", "params"],
+      "cat_features": ["permittypedesc", "permitclass", "zone_family", "review_complexity_max"],
+      "num_features": ["latitude", "longitude", "log_housingunitsadded", "app_year", "app_month", "comment_n_distinct_cycles", "comment_n_rows"],
+      "preprocessing": "OrdinalEncoder for categoricals, passthrough for numerics (LightGBM handles nulls natively)",
+      "output_format": "X.X months (Y days) for optimistic/typical/pessimistic",
+      "metrics": {
+        "coverage_rate_mean": 0.788,
+        "mae_days_typical_mean": 72.9,
+        "coverage_target": 0.80,
+        "note": "Coverage = fraction of actual values within optimistic-pessimistic interval"
+      },
+      "key_features_by_shap": ["permittypedesc (0.25)", "review_complexity_max (0.20)", "app_year (0.16)", "permitclass (0.09)", "latitude (0.07)"],
+      "review_complexity_max_note": "VERIFY WITH LIAISON — confirm this is assigned at submission time not during review"
+    },
+    "history": [
+      {"name": "RF Broad", "oof_r2": 0.3613, "mae_days": 76.0, "features": 7},
+      {"name": "RF Broad + Comments", "oof_r2": 0.3691, "mae_days": 74.6, "features": 16},
+      {"name": "XGB Broad + Comments", "oof_r2": 0.3707, "mae_days": 75.4, "features": 16},
+      {"name": "LightGBM FeatureSel (SHAP)", "oof_r2": 0.4359, "mae_days": null, "features": 11},
+      {"name": "Quantile LightGBM (production)", "coverage": 0.788, "mae_days": 72.9, "features": 11}
+    ]
+  },
+  "feature_selection": {
+    "method": "Two-stage: Mutual Information filter (5% of max threshold) then SHAP analysis (1% norm threshold) using LightGBM",
+    "notebook": "FeatureSelection.ipynb",
+    "results_file": "output/feature_selection_results.csv",
+    "recommended_features": [
+      {"feature": "permittypedesc", "type": "categorical", "shap_norm": 0.2515},
+      {"feature": "review_complexity_max", "type": "categorical", "shap_norm": 0.2030},
+      {"feature": "app_year", "type": "numeric", "shap_norm": 0.1571},
+      {"feature": "permitclass", "type": "categorical", "shap_norm": 0.0911},
+      {"feature": "latitude", "type": "numeric", "shap_norm": 0.0726},
+      {"feature": "zone_family", "type": "categorical", "shap_norm": 0.0517},
+      {"feature": "log_housingunitsadded", "type": "numeric", "shap_norm": 0.0499},
+      {"feature": "longitude", "type": "numeric", "shap_norm": 0.0472},
+      {"feature": "app_month", "type": "numeric", "shap_norm": 0.0348},
+      {"feature": "comment_n_distinct_cycles", "type": "comment", "shap_norm": 0.0154},
+      {"feature": "comment_n_rows", "type": "comment", "shap_norm": 0.0102}
+    ],
+    "excluded": ["comment_n_subjects", "app_quarter", "comment_max_cycle", "comment_has_structural", "comment_has_design_review", "comment_has_eca", "comment_n_review_types", "comment_resubmit_rate", "dependentbuilding"]
+  },
+  "website": {
+    "stack": "GitHub Pages (static frontend) + Render free tier (FastAPI backend)",
+    "geocoder": "Nominatim (OpenStreetMap) — Census geocoder blocked by CORS",
+    "zone_inference": "Geographic heuristics from lat/lon — not a true spatial join",
+    "history_card": {
+      "source": "permit_lookup.json — spatial grid index built from full building_permits.csv post-2000",
+      "match_radius_deg": 0.00027,
+      "match_radius_meters": 30,
+      "grid_resolution": "0.001 degrees (~110m cells)",
+      "script": "scripts/generate_permit_lookup.py"
+    },
+    "render": {
+      "service_name": "seattle-permit-predictor",
+      "url": "https://seattle-permit-predictor.onrender.com",
+      "plan": "free (512MB RAM, spins down after inactivity)",
+      "coldstart": "~30 seconds, handled by warmup ping on page load with retry logic",
+      "scikit_learn_version": "1.6.1 — MUST match training environment",
+      "python_version": "3.11.0"
+    },
+    "files_not_needed_on_render": ["ModelWeights_RF.onnx", "model_meta.json — ONNX approach abandoned in favor of FastAPI"],
+    "inputs_removed": ["estprojectcost — not known at submission per liaison"],
+    "inputs_present": ["address (geocoded)", "project_type dropdown", "housing_units_added"]
+  },
+  "comment_extraction": {
+    "notebook": "Corrections-Letters-v5.ipynb",
+    "status": "Pipeline built, do_lookup/do_download/do_parsing flags set to False by default",
+    "pdf_output_dir": "C:/Users/flori/Desktop/data/ — kept off repo intentionally",
+    "output_file": "output/correction_comments.csv",
+    "stages": ["do_lookup: hits city ECM API for correction letter URLs", "do_download: downloads PDFs", "do_parsing: extracts text into correction_comments.csv"],
+    "filter": "Filtered to 14k modeling population permits only",
+    "known_issue": "Public plan_comments.csv is full export (26,299 rows) — no additional data available via API. Full coverage requires liaison-provided internal export.",
+    "building_permits_column": "PermitNum renamed to RecordNumber in notebook"
+  },
+  "open_questions": [
+    "review_complexity_max: confirm with liaison whether assigned at submission or during review",
+    "Full plan_comments dataset: request complete internal export from liaison to improve comment feature coverage from 5% to potentially 30-40%",
+    "Temporal leakage: KFold shuffle means future permits can train on past — time-based split would be more rigorous for production",
+    "ONNX conversion: skl2onnx does not support LightGBM quantile objective — FastAPI is the correct production path"
+  ],
+  "next_steps": [
+    "Run Corrections-Letters-v5.ipynb once liaison provides fuller comment data",
+    "Retrain PermitPredictor_Quantile.ipynb with enriched comment features",
+    "Verify review_complexity_max leakage status with liaison",
+    "Consider time-based train/val split for more honest evaluation",
+    "Update permit_lookup.json after any master_dataset changes by running scripts/generate_permit_lookup.py"
+  ],
+  "paths": {
+    "repo_root": "C:/Users/flori/Documents/GitHub/CSB425-City-of-Seattle-Permit-Predictor",
+    "data": "C:/Users/flori/Documents/GitHub/CSB425-City-of-Seattle-Permit-Predictor/data",
+    "output": "C:/Users/flori/Documents/GitHub/CSB425-City-of-Seattle-Permit-Predictor/output",
+    "notebooks": "C:/Users/flori/Documents/GitHub/CSB425-City-of-Seattle-Permit-Predictor/notebooks",
+    "scripts": "C:/Users/flori/Documents/GitHub/CSB425-City-of-Seattle-Permit-Predictor/scripts",
+    "api": "C:/Users/flori/Documents/GitHub/CSB425-City-of-Seattle-Permit-Predictor/api",
+    "desktop_data": "C:/Users/flori/Desktop/data — PDF downloads from correction letter extraction"
+  },
+  "preferences": {
+    "formatting": "prose paragraphs preferred over bullet points",
+    "acronyms": "always spell out acronyms (e.g. RF = Random Forest, MAE = Mean Absolute Error, OOF = Out-of-Fold, SHAP = SHapley Additive exPlanations, ADU = Accessory Dwelling Unit, DADU = Detached Accessory Dwelling Unit, MI = Mutual Information, CV = Cross Validation)",
+    "code_style": "Times New Roman not applicable to code; filenames include descriptive titles",
+    "report_style": "diagnostic reports at end of each notebook, plain text format"
+  }
+}
