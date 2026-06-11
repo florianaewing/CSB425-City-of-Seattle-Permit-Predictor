@@ -1,7 +1,6 @@
 """
-Seattle Permit Predictor — FastAPI Backend
-Serves quantile model predictions (optimistic / typical / pessimistic)
-from ModelWeights_Quantile.joblib.
+Seattle Permit  FastAPI BackendPredictor 
+Serves quantile model predictions + SDCI permit history lookup
 """
 
 from fastapi import FastAPI, HTTPException
@@ -12,69 +11,66 @@ import numpy as np
 import pandas as pd
 import joblib
 import datetime
-import os
+import sys
 from pathlib import Path
 
-# ── Load model bundle at startup ──────────────────────────────────
-MODEL_PATH = Path(__file__).parent / 'ModelWeights_Quantile.joblib'
+sys.path.insert(0, str(Path(__file__).parent.parent / 'scripts'))
+from sdci_scraper import SDCIScraper
 
+MODEL_PATH = Path(__file__).parent / 'ModelWeights_Quantile.joblib'
 print(f'Loading model from {MODEL_PATH}...')
 bundle = joblib.load(MODEL_PATH)
-preprocessor  = bundle['preprocessor']
-models        = bundle['models']       # {'optimistic': lgb, 'typical': lgb, 'pessimistic': lgb}
-cat_features  = bundle['cat_features']
-num_features  = bundle['num_features']
-all_features  = bundle['feature_names']
+preprocessor = bundle['preprocessor']
+models = bundle['models']
 print('Model loaded successfully.')
 
-# ── App setup ─────────────────────────────────────────────────────
 app = FastAPI(
     title='Seattle Permit Predictor API',
-    description='Quantile regression model for permit review time prediction',
+    description='Quantile regression + SDCI permit history',
     version='1.0.0'
 )
 
-# Allow requests from GitHub Pages and localhost
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-    'https://florianaewing.github.io',
-    'https://florianaewing.github.io/CSB425-City-of-Seattle-Permit-Predictor',
-    'https://florianaewing.github.io/CSB425-City-of-Seattle-Permit-Predictor/',
-    'http://localhost:8000',
-    'http://127.0.0.1:8000',
-    'http://localhost:3000',
+        'https://florianaewing.github.io',
+        'https://florianaewing.github.io/CSB425-City-of-Seattle-Permit-Predictor',
+        'https://florianaewing.github.io/CSB425-City-of-Seattle-Permit-Predictor/',
+        'http://localhost:8000',
+        'http://127.0.0.1:8000',
+        'http://localhost:3000',
     ],
     allow_credentials=True,
     allow_methods=['*'],
     allow_headers=['*'],
 )
 
-# ── Request / Response schemas ─────────────────────────────────────
 class PredictRequest(BaseModel):
-    permittypedesc:            str
-    permitclass:               str
-    zone_family:               str
-    review_complexity_max:     Optional[str]  = 'Unknown'
-    latitude:                  Optional[float] = None
-    longitude:                 Optional[float] = None
-    housingunitsadded:         Optional[float] = None
-    app_year:                  Optional[int]   = None
-    app_month:                 Optional[int]   = None
+    permittypedesc: str
+    permitclass: str
+    zone_family: str
+    review_complexity_max: Optional[str] = 'Unknown'
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    housingunitsadded: Optional[float] = None
+    app_year: Optional[int] = None
+    app_month: Optional[int] = None
     comment_n_distinct_cycles: Optional[float] = None
-    comment_n_rows:            Optional[float] = None
+    comment_n_rows: Optional[float] = None
 
 class TimelineEstimate(BaseModel):
-    days:   int
+    days: int
     months: float
-    label:  str   # formatted string e.g. "4.3 months (132 days)"
+    label: str
 
 class PredictResponse(BaseModel):
-    optimistic:  TimelineEstimate
-    typical:     TimelineEstimate
+    optimistic: TimelineEstimate
+    typical: TimelineEstimate
     pessimistic: TimelineEstimate
 
-# ── Helper ─────────────────────────────────────────────────────────
+class SDCIReportRequest(BaseModel):
+    address: str
+
 def format_timeline(days: float) -> TimelineEstimate:
     months = days / 30.44
     return TimelineEstimate(
@@ -83,13 +79,11 @@ def format_timeline(days: float) -> TimelineEstimate:
         label=f'{months:.1f} months ({int(round(days))} days)'
     )
 
-# ── Endpoints ──────────────────────────────────────────────────────
 @app.get('/')
 def root():
     return {
         'status': 'online',
-        'model':  'Seattle Permit Predictor — Quantile Model',
-        'endpoints': ['/predict', '/health']
+        'endpoints': ['/predict', '/sdci-report', '/health']
     }
 
 @app.get('/health')
@@ -100,35 +94,43 @@ def health():
 def predict(req: PredictRequest):
     try:
         now = datetime.datetime.now()
-
         row = pd.DataFrame([{
-            'permittypedesc':            req.permittypedesc,
-            'permitclass':               req.permitclass,
-            'zone_family':               req.zone_family,
-            'review_complexity_max':     req.review_complexity_max or 'Unknown',
-            'latitude':                  req.latitude            if req.latitude            is not None else np.nan,
-            'longitude':                 req.longitude           if req.longitude           is not None else np.nan,
-            'log_housingunitsadded':     np.log1p(req.housingunitsadded) if req.housingunitsadded is not None else np.nan,
-            'app_year':                  req.app_year            if req.app_year            is not None else now.year,
-            'app_month':                 req.app_month           if req.app_month           is not None else now.month,
+            'permittypedesc': req.permittypedesc,
+            'permitclass': req.permitclass,
+            'zone_family': req.zone_family,
+            'review_complexity_max': req.review_complexity_max or 'Unknown',
+            'latitude': req.latitude if req.latitude is not None else np.nan,
+            'longitude': req.longitude if req.longitude is not None else np.nan,
+            'log_housingunitsadded': np.log1p(req.housingunitsadded) if req.housingunitsadded is not None else np.nan,
+            'app_year': req.app_year if req.app_year is not None else now.year,
+            'app_month': req.app_month if req.app_month is not None else now.month,
             'comment_n_distinct_cycles': req.comment_n_distinct_cycles if req.comment_n_distinct_cycles is not None else np.nan,
-            'comment_n_rows':            req.comment_n_rows            if req.comment_n_rows            is not None else np.nan,
+            'comment_n_rows': req.comment_n_rows if req.comment_n_rows is not None else np.nan,
         }])
-
         X_row = preprocessor.transform(row)
-
         results = {}
         for name, model in models.items():
-            pred_log  = model.predict(X_row)[0]
+            pred_log = model.predict(X_row)[0]
             pred_days = float(np.expm1(pred_log))
             pred_days = max(1.0, pred_days)
             results[name] = format_timeline(pred_days)
-
         return PredictResponse(
             optimistic=results['optimistic'],
             typical=results['typical'],
             pessimistic=results['pessimistic'],
         )
-
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post('/sdci-report')
+async def sdci_report(req: SDCIReportRequest):
+    """Fetch SDCI permit history for an address"""
+    try:
+        report = SDCIScraper.search_address(req.address)
+        return SDCIScraper.format_report(report)
+    except Exception as e:
+        return {
+            'success': False,
+            'address': req.address,
+            'error': f'Server error: {str(e)}'
+        }
